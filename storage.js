@@ -3,6 +3,7 @@ var flat = require('flat-tree')
 
 module.exports = Storage
 
+var noarr = []
 var blank = new Buffer(64)
 blank.fill(0)
 
@@ -24,11 +25,11 @@ Storage.prototype.getBitfield = function (index, cb) {
   this.dataBitfield.read(index * 1024, 1024, cb)
 }
 
-Storage.prototype.putData = function (index, data, cb) {
+Storage.prototype.putData = function (index, data, nodes, cb) {
   if (!cb) cb = noop
   var self = this
   if (!data.length) return cb(null)
-  this.dataInfo(index, function (err, offset, size) {
+  this.dataOffset(index, nodes, function (err, offset, size) {
     if (err) return cb(err)
     if (size !== data.length) return cb(new Error('Unexpected data size'))
     self.data.write(offset, data, cb)
@@ -37,22 +38,25 @@ Storage.prototype.putData = function (index, data, cb) {
 
 Storage.prototype.getData = function (index, cb) {
   var self = this
-  this.dataInfo(index, function (err, offset, size) {
+  this.dataOffset(index, noarr, function (err, offset, size) {
     if (err) return cb(err)
     self.data.read(offset, size, cb)
   })
 }
 
-Storage.prototype.dataInfo = function (index, cb) {
+Storage.prototype.dataOffset = function (index, nodes, cb) {
   var roots = flat.fullRoots(2 * index)
   var self = this
   var offset = 0
   var pending = roots.length
   var error = null
+
   if (!pending) this.getNode(2 * index, onlast)
 
   for (var i = 0; i < roots.length; i++) {
-    this.getNode(roots[i], onnode)
+    var node = findNode(nodes, roots[i])
+    if (node) onnode(null, node)
+    else this.getNode(roots[i], onnode)
   }
 
   function onlast (err, node) {
@@ -64,6 +68,7 @@ Storage.prototype.dataInfo = function (index, cb) {
     if (err) error = err
     if (node) offset += node.size
     if (--pending) return
+
     if (error) return cb(error)
     self.getNode(2 * index, onlast)
   }
@@ -121,7 +126,7 @@ Storage.prototype.putNode = function (index, node, cb) {
 
   node.hash.copy(buf, 0)
   uint64be.encode(node.size, buf, 32)
-// if (offset === 224) console.log('offset', offset, buf.length, index)
+
   if (leaf) {
     if (node.signature) node.signature.copy(buf, 40)
     else blank.copy(buf, 40)
@@ -139,6 +144,13 @@ function Node (index, hash, size, sig) {
   this.hash = hash
   this.size = size
   this.signature = sig
+}
+
+function findNode (nodes, index) {
+  for (var i = 0; i < nodes.length; i++) {
+    if (nodes[i].index === index) return nodes[i]
+  }
+  return null
 }
 
 function isNil (buf) {

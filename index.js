@@ -105,6 +105,7 @@ Feed.prototype.proof = function (index, opts, cb) {
 
     if (--pending) return
     if (error) return cb(error)
+
     cb(null, {nodes: nodes, signature: signature})
   }
 }
@@ -167,18 +168,17 @@ Feed.prototype._commit = function (index, data, nodes, cb) {
   var pending = nodes.length + 1
   var error = null
 
-  for (var i = 0; i < nodes.length; i++) this._storage.putNode(nodes[i].index, nodes[i], ondone)
-  this._storage.putData(index, data, ondone)
+  for (var i = 0; i < nodes.length; i++) self._storage.putNode(nodes[i].index, nodes[i], ondone)
+  self._storage.putData(index, data, nodes, ondone)
 
   function ondone (err) {
     if (err) error = err
     if (--pending) return
 
-    if (error) return cb(err)
+    if (error) return cb(error)
     for (var i = 0; i < nodes.length; i++) self.tree.set(nodes[i].index)
     self.tree.set(2 * index)
     self.bitfield.set(index, true)
-    cb(null)
   }
 }
 
