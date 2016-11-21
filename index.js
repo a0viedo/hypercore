@@ -7,6 +7,9 @@ var from = require('from2')
 var bitfield = require('sparse-bitfield')
 var thunky = require('thunky')
 var batcher = require('atomic-batcher')
+var inherits = require('inherits')
+var events = require('events')
+var toBuffer = require('to-buffer')
 var treeIndex = require('./tree-index')
 var storage = require('./storage')
 var hash = require('./hash')
@@ -15,6 +18,7 @@ module.exports = Feed
 
 function Feed (key, opts, file) {
   if (!(this instanceof Feed)) return new Feed(key, opts, file)
+  events.EventEmitter.call(this)
 
   if (typeof key === 'string') key = new Buffer(key, 'hex')
 
@@ -38,12 +42,13 @@ function Feed (key, opts, file) {
   this.bytes = 0
   this.key = key || null
   this.secretKey = null
-  this.tree = treeIndex()
-  this.bitfield = bitfield()
-  this.open = thunky(open)
+  this.tree = treeIndex(bitfield({trackUpdates: true}))
+  this.bitfield = bitfield({trackUpdates: true})
+  this.ready = thunky(open)
+  this.opened = false
 
+  this._merkle = null
   this._storage = storage(file)
-  this._merkle = merkle(hash)
   this._batch = batcher(work)
 
   if (!this.key && this.live) {
@@ -61,17 +66,58 @@ function Feed (key, opts, file) {
   }
 }
 
+inherits(Feed, events.EventEmitter)
+
 Feed.prototype.replicate = function () {
   return null
 }
 
 Feed.prototype._open = function (cb) {
-  // console.log('sup')
-  cb()
+  var self = this
+  var pageSize = 1024
+  var missing = 3
+
+  // TODO: read all bitfields
+  this._storage.dataBitfield.read(0, pageSize, function (_, buf) {
+    if (buf) self.bitfield.setBuffer(0, buf)
+    done()
+  })
+
+  // TODO: read all bitfields
+  this._storage.treeBitfield.read(0, pageSize, function (_, buf) {
+    if (buf) self.tree.bitfield.setBuffer(0, buf)
+    done()
+  })
+
+  this._storage.getInfo(function (_, info) {
+    if (!info) return done()
+
+    self.blocks = info.blocks
+    self.key = info.key
+    self.secretKey = info.secretKey
+
+    done()
+  })
+
+  function done () {
+    if (--missing) return
+    self._roots(self.blocks, onroots)
+  }
+
+  function onroots (err, roots) {
+    if (err) return cb(err)
+
+    self.bytes = roots.reduce(addSize, 0)
+    self._merkle = merkle(hash, roots)
+    self.opened = true
+
+    cb(null)
+  }
 }
 
 Feed.prototype.proof = function (index, opts, cb) {
   if (typeof opts === 'function') return this.proof(index, null, opts)
+  if (!this.opened) return this._readyAndProof(index, opts, cb)
   if (!opts) opts = {}
 
   var proof = this.tree.proof(2 * index, opts)
@@ -110,7 +156,17 @@ Feed.prototype.proof = function (index, opts, cb) {
   }
 }
 
+Feed.prototype._readyAndProof = function (index, opts, cb) {
+  var self = this
+  this.ready(function (err) {
+    if (err) return cb(err)
+    self.proof(index, opts, cb)
+  })
+}
+
 Feed.prototype.put = function (index, data, proof, cb) {
+  if (!this.opened) return this._readyAndPut(index, data, proof, cb)
+
   var self = this
   var trusted = -1
   var missing = []
@@ -163,6 +219,14 @@ Feed.prototype.put = function (index, data, proof, cb) {
   }
 }
 
+Feed.prototype._readyAndPut = function (index, data, proof, cb) {
+  var self = this
+  this.ready(function (err) {
+    if (err) return cb(err)
+    self.put(index, data, proof, cb)
+  })
+}
+
 Feed.prototype._commit = function (index, data, nodes, cb) {
   var self = this
   var pending = nodes.length + 1
@@ -179,6 +243,7 @@ Feed.prototype._commit = function (index, data, nodes, cb) {
     for (var i = 0; i < nodes.length; i++) self.tree.set(nodes[i].index)
     self.tree.set(2 * index)
     self.bitfield.set(index, true)
+    self._sync(cb)
   }
 }
 
@@ -247,8 +312,17 @@ Feed.prototype._verify = function (index, data, proof, missing, trusted) {
   }
 }
 
-Feed.prototype.get = function (i, cb) {
-  this._storage.getData(i, cb)
+Feed.prototype.get = function (index, cb) {
+  if (!this.opened) return this._readyAndGet(index, cb)
+  this._storage.getData(index, cb)
+}
+
+Feed.prototype._readyAndGet = function (index, cb) {
+  var self = this
+  this.ready(function (err) {
+    if (err) return cb(err)
+    self.get(index, cb)
+  })
 }
 
 Feed.prototype.createWriteStream = function () {
@@ -263,25 +337,31 @@ Feed.prototype.createWriteStream = function () {
 Feed.prototype.createReadStream = function () {
   var self = this
   var start = 0
+
   return from(read)
 
   function read (size, cb) {
+    if (!self.opened) return open(batch, cb)
+    if (start === self.blocks) return cb(null, null)
     self.get(start++, cb)
+  }
+
+  function open (batch, cb) {
+    self.open(function (err) {
+      if (err) return cb(err)
+      write(batch, cb)
+    })
   }
 }
 
 Feed.prototype.finalize = function (cb) {
   if (!this.key) this.key = hash.tree(this._merkle.roots)
-  this._storage.putInfo({
-    blocks: this.blocks,
-    key: this.key,
-    secretKey: this.secretKey
-  }, cb)
+  this._storage.putInfo(this, cb)
 }
 
 Feed.prototype.append = function (batch, cb) {
-  if (Array.isArray(batch)) this._batch(batch, cb)
-  else this._batch([toBuffer(batch)], cb)
+  if (Array.isArray(batch)) this._batch(batch, cb || noop)
+  else this._batch([toBuffer(batch)], cb || noop)
 }
 
 Feed.prototype.flush = function (cb) {
@@ -289,7 +369,7 @@ Feed.prototype.flush = function (cb) {
 }
 
 Feed.prototype._append = function (batch, cb) {
-  if (!cb) cb = noop
+  if (!this.opened) return this._readyAndAppend(batch, cb)
 
   var self = this
   var pending = batch.length
@@ -319,13 +399,65 @@ Feed.prototype._append = function (batch, cb) {
     if (--pending) return
     if (error) return cb(error)
 
-    self.bytes += offset
+    self.bytes += offset // TODO: set after _sync
     for (var i = 0; i < batch.length; i++) {
       self.bitfield.set(self.blocks, true)
       self.tree.set(2 * self.blocks++)
     }
 
-    cb()
+    self._sync(cb)
+  }
+}
+
+Feed.prototype._readyAndAppend = function (batch, cb) {
+  var self = this
+  this.ready(function (err) {
+    if (err) return cb(err)
+    self._batch(batch, cb)
+  })
+}
+
+Feed.prototype._sync = function (cb) { // TODO: lock it
+  var missing = this.bitfield.updates.length + this.tree.bitfield.updates.length + 1
+  var next = null
+  var error = null
+
+  while (next = this.bitfield.nextUpdate()) {
+    this._storage.dataBitfield.write(next.offset, next.buffer, ondone)
+  }
+
+  while (next = this.tree.bitfield.nextUpdate()) {
+    this._storage.treeBitfield.write(next.offset, next.buffer, ondone)
+  }
+
+  this._storage.putInfo(this, ondone)
+
+  function ondone (err) {
+    if (err) error = err
+    if (--missing) return
+    cb(error)
+  }
+}
+
+Feed.prototype._roots = function (index, cb) {
+  var roots = flat.fullRoots(2 * index)
+  var result = new Array(roots.length)
+  var self = this
+  var pending = roots.length
+  var error = null
+
+  if (!pending) return cb(null, result)
+
+  for (var i = 0; i < roots.length; i++) {
+    this._storage.getNode(roots[i], onnode)
+  }
+
+  function onnode (err, node) {
+    if (err) error = err
+    if (node) result[roots.indexOf(node.index)] = node
+    if (--pending) return
+    if (error) return cb(error)
+    cb(null, result)
   }
 }
 
@@ -341,10 +473,4 @@ function addSize (size, node) {
 
 function isObject (val) {
   return !!(val && typeof val === 'object' && !Buffer.isBuffer(val))
-}
-
-function toBuffer (val) {
-  if (Buffer.isBuffer(val)) return val
-  if (typeof val === 'string') return new Buffer(val)
-  throw new Error('Must be a string or buffer')
 }

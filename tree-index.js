@@ -1,11 +1,10 @@
-var bitfield = require('sparse-bitfield')
 var flat = require('flat-tree')
 
 module.exports = TreeIndex
 
-function TreeIndex () {
-  if (!(this instanceof TreeIndex)) return new TreeIndex()
-  this.bitfield = bitfield()
+function TreeIndex (bitfield) {
+  if (!(this instanceof TreeIndex)) return new TreeIndex(bitfield)
+  this.bitfield = bitfield
 }
 
 TreeIndex.prototype.proof = function (index, opts) {

@@ -44,7 +44,7 @@ Storage.prototype.getData = function (index, cb) {
   })
 }
 
-Storage.prototype.dataOffset = function (index, nodes, cb) {
+Storage.prototype.dataOffset = function (index, cachedNodes, cb) {
   var roots = flat.fullRoots(2 * index)
   var self = this
   var offset = 0
@@ -54,7 +54,7 @@ Storage.prototype.dataOffset = function (index, nodes, cb) {
   if (!pending) this.getNode(2 * index, onlast)
 
   for (var i = 0; i < roots.length; i++) {
-    var node = findNode(nodes, roots[i])
+    var node = findNode(cachedNodes, roots[i])
     if (node) onnode(null, node)
     else this.getNode(roots[i], onnode)
   }
@@ -75,7 +75,7 @@ Storage.prototype.dataOffset = function (index, nodes, cb) {
 }
 
 Storage.prototype.putInfo = function (info, cb) {
-  var buf = new Buffer(72)
+  var buf = new Buffer(104)
   uint64be.encode(info.blocks, buf, 0)
   info.key.copy(buf, 8)
   if (info.secretKey) info.secretKey.copy(buf, 40)
@@ -86,7 +86,7 @@ Storage.prototype.putInfo = function (info, cb) {
 Storage.prototype.getInfo = function (cb) {
   var self = this
 
-  this.info.read(0, 72, function (err, buf) {
+  this.info.read(0, 104, function (err, buf) {
     if (err) return cb(err)
 
     var secretKey = buf.slice(40)
