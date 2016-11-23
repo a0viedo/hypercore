@@ -1,4 +1,5 @@
 var flat = require('flat-tree')
+var bitfield = require('sparse-bitfield')
 
 module.exports = TreeIndex
 
@@ -11,7 +12,7 @@ TreeIndex.prototype.proof = function (index, opts) {
   if (!opts) opts = {}
 
   var nodes = []
-  var remoteTree = opts.tree || TreeIndex()
+  var remoteTree = opts.tree || TreeIndex(bitfield())
   var digest = opts.digest || 0
 
   if (!this.get(index)) return null

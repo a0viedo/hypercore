@@ -1,5 +1,6 @@
 var uint64be = require('uint64be')
 var flat = require('flat-tree')
+var lru = require('lru')
 
 module.exports = Storage
 
@@ -107,6 +108,7 @@ Storage.prototype.getNode = function (index, cb) {
   var leaf = !(index & 1)
   var offset = 40 * index + 64 * Math.ceil(index / 2)
   var length = leaf ? 104 : 40
+  var self = this
 
   this.tree.read(offset, length, function (err, buf) {
     if (err) return cb(err)
@@ -116,13 +118,14 @@ Storage.prototype.getNode = function (index, cb) {
 
     if (!size && !notBlank(hash)) return cb(new Error('Index not found ' + index + ' '))
 
-    var val = new Node(index, hash, size, leaf ? buf.slice(40) : null)
+    var val = new Node(index, hash, size, leaf ? notBlank(buf.slice(40)) : null)
     cb(null, val)
   })
 }
 
 Storage.prototype.putNode = function (index, node, cb) {
   if (!cb) cb = noop
+
   var leaf = !(index & 1)
   var length = leaf ? 104 : 40
   var offset = 40 * index + 64 * Math.ceil(index / 2)
