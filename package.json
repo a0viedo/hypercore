@@ -17,7 +17,6 @@
     "sodium-signatures": "^1.4.1",
     "sparse-bitfield": "^2.0.1",
     "thunky": "^1.0.1",
-    "to-buffer": "^1.0.1",
     "uint64be": "^1.0.1"
   },
   "devDependencies": {
