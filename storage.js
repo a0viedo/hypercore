@@ -77,9 +77,13 @@ Storage.prototype.dataOffset = function (index, cachedNodes, cb) {
 Storage.prototype.putInfo = function (info, cb) {
   var buf = new Buffer(104)
   uint64be.encode(info.blocks, buf, 0)
-  info.key.copy(buf, 8)
+
+  if (info.key) info.key.copy(buf, 8)
+  else blank.copy(buf, 8)
+
   if (info.secretKey) info.secretKey.copy(buf, 40)
   else blank.copy(buf, 40)
+
   this.info.write(0, buf, cb)
 }
 
@@ -93,8 +97,8 @@ Storage.prototype.getInfo = function (cb) {
 
     cb(null, {
       blocks: uint64be.decode(buf, 0),
-      key: buf.slice(8, 40),
-      secretKey: isNil(secretKey) ? null : secretKey
+      key: notBlank(buf.slice(8, 40)),
+      secretKey: notBlank(secretKey)
     })
   })
 }
@@ -110,7 +114,7 @@ Storage.prototype.getNode = function (index, cb) {
     var hash = buf.slice(0, 32)
     var size = uint64be.decode(buf, 32)
 
-    if (!size && isNil(hash)) return cb(new Error('Index not found ' + index + ' '))
+    if (!size && !notBlank(hash)) return cb(new Error('Index not found ' + index + ' '))
 
     var val = new Node(index, hash, size, leaf ? buf.slice(40) : null)
     cb(null, val)
@@ -153,9 +157,9 @@ function findNode (nodes, index) {
   return null
 }
 
-function isNil (buf) {
+function notBlank (buf) {
   for (var i = 0; i < buf.length; i++) {
-    if (buf[i]) return false
+    if (buf[i]) return buf
   }
-  return true
+  return null
 }
