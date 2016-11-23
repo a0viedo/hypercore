@@ -4,12 +4,12 @@ var flat = require('flat-tree')
 var bulk = require('bulk-write-stream')
 var signatures = require('sodium-signatures')
 var from = require('from2')
+var codecs = require('codecs')
 var bitfield = require('sparse-bitfield')
 var thunky = require('thunky')
 var batcher = require('atomic-batcher')
 var inherits = require('inherits')
 var events = require('events')
-var toBuffer = require('to-buffer')
 var treeIndex = require('./tree-index')
 var storage = require('./storage')
 var hash = require('./hash')
@@ -32,6 +32,7 @@ function Feed (key, opts, file) {
     opts = null
   }
 
+  if (!file) file = opts.storage
   if (!file) throw new Error('You must specify a storage provider')
   if (!opts) opts = {}
 
@@ -51,11 +52,8 @@ function Feed (key, opts, file) {
   this._storage = storage(file)
   this._batch = batcher(work)
 
-  if (!this.key && this.live) {
-    var pair = signatures.keyPair()
-    this.secretKey = pair.secretKey
-    this.key = pair.publicKey
-  }
+  // Switch to ndjson encoding if JSON is used. That way data files parse like ndjson \o/
+  this._codec = codecs(opts.valueEncoding === 'json' ? 'ndjson' : opts.valueEncoding)
 
   function work (values, cb) {
     self._append(values, cb)
@@ -74,44 +72,61 @@ Feed.prototype.replicate = function () {
 
 Feed.prototype._open = function (cb) {
   var self = this
-  var pageSize = 1024
-  var missing = 3
-
-  // TODO: read all bitfields
-  this._storage.dataBitfield.read(0, pageSize, function (_, buf) {
-    if (buf) self.bitfield.setBuffer(0, buf)
-    done()
-  })
-
-  // TODO: read all bitfields
-  this._storage.treeBitfield.read(0, pageSize, function (_, buf) {
-    if (buf) self.tree.bitfield.setBuffer(0, buf)
-    done()
-  })
+  var pageSize = this.bitfield.pageSize
+  var blank = calloc(pageSize)
+  var error = null
+  var roots = null
+  var missing = 1
 
   this._storage.getInfo(function (_, info) {
-    if (!info) return done()
+    if (!info) return onroots(null, [])
 
     self.blocks = info.blocks
     self.key = info.key
     self.secretKey = info.secretKey
 
-    done()
+    var pages = Math.ceil(self.blocks / 8 / pageSize)
+    var treePages = 2 * pages
+    var i = 0
+
+    missing += pages + treePages
+
+    for (i = 0; i < pages; i++) readBitPage(self._storage.dataBitfield, self.bitfield, i * pageSize)
+    for (i = 0; i < treePages; i++) readBitPage(self._storage.treeBitfield, self.tree.bitfield, i * pageSize)
+
+    self._roots(self.blocks, onroots)
   })
+
+  function readBitPage (storage, bitfield, offset) {
+    storage.read(offset, pageSize, function (_, buf) {
+      // TODO: check if buf is 0xffff...ff and just set a flag if that is the case
+      if (buf && !equals(buf, blank)) bitfield.setBuffer(offset, buf)
+      done()
+    })
+  }
 
   function done () {
     if (--missing) return
-    self._roots(self.blocks, onroots)
-  }
+    if (error) return cb(err)
 
-  function onroots (err, roots) {
-    if (err) return cb(err)
+    if (!self.key && self.live) {
+      var pair = signatures.keyPair()
+      self.secretKey = pair.secretKey
+      self.key = pair.publicKey
+    }
 
     self.bytes = roots.reduce(addSize, 0)
     self._merkle = merkle(hash, roots)
     self.opened = true
+    self.emit('ready')
 
     cb(null)
+  }
+
+  function onroots (err, result) {
+    if (err) error = err
+    else roots = result
+    done()
   }
 }
 
@@ -165,6 +180,10 @@ Feed.prototype._readyAndProof = function (index, opts, cb) {
 }
 
 Feed.prototype.put = function (index, data, proof, cb) {
+  this.putBuffer(index, this._codec.encode(data), proof, cb)
+}
+
+Feed.prototype.putBuffer = function (index, data, proof, cb) {
   if (!this.opened) return this._readyAndPut(index, data, proof, cb)
 
   var self = this
@@ -223,7 +242,7 @@ Feed.prototype._readyAndPut = function (index, data, proof, cb) {
   var self = this
   this.ready(function (err) {
     if (err) return cb(err)
-    self.put(index, data, proof, cb)
+    self.putBuffer(index, data, proof, cb)
   })
 }
 
@@ -313,6 +332,10 @@ Feed.prototype._verify = function (index, data, proof, missing, trusted) {
 }
 
 Feed.prototype.get = function (index, cb) {
+  this.getBuffer(index, this._codec === codecs.binary ? cb : this._wrapCodec(cb))
+}
+
+Feed.prototype.getBuffer = function (index, cb) {
   if (!this.opened) return this._readyAndGet(index, cb)
   this._storage.getData(index, cb)
 }
@@ -321,13 +344,21 @@ Feed.prototype._readyAndGet = function (index, cb) {
   var self = this
   this.ready(function (err) {
     if (err) return cb(err)
-    self.get(index, cb)
+    self.getBuffer(index, cb)
   })
+}
+
+Feed.prototype._wrapCodec = function (cb) {
+  var self = this
+  return function (err, buf) {
+    if (err) return cb(err)
+    cb(null, self._codec.decode(buf))
+  }
 }
 
 Feed.prototype.createWriteStream = function () {
   var self = this
-  return bulk(write)
+  return bulk.obj(write)
 
   function write (batch, cb) {
     self._append(batch, cb)
@@ -338,18 +369,18 @@ Feed.prototype.createReadStream = function () {
   var self = this
   var start = 0
 
-  return from(read)
+  return from.obj(read)
 
   function read (size, cb) {
-    if (!self.opened) return open(batch, cb)
+    if (!self.opened) return open(size, cb)
     if (start === self.blocks) return cb(null, null)
     self.get(start++, cb)
   }
 
-  function open (batch, cb) {
-    self.open(function (err) {
+  function open (size, cb) {
+    self.ready(function (err) {
       if (err) return cb(err)
-      write(batch, cb)
+      read(size, cb)
     })
   }
 }
@@ -361,7 +392,7 @@ Feed.prototype.finalize = function (cb) {
 
 Feed.prototype.append = function (batch, cb) {
   if (Array.isArray(batch)) this._batch(batch, cb || noop)
-  else this._batch([toBuffer(batch)], cb || noop)
+  else this._batch([batch], cb || noop)
 }
 
 Feed.prototype.flush = function (cb) {
@@ -379,7 +410,7 @@ Feed.prototype._append = function (batch, cb) {
   if (!pending) return cb()
 
   for (var i = 0; i < batch.length; i++) {
-    var data = toBuffer(batch[i])
+    var data = this._codec.encode(batch[i])
     var nodes = this._merkle.next(data)
 
     pending += nodes.length
@@ -399,10 +430,10 @@ Feed.prototype._append = function (batch, cb) {
     if (--pending) return
     if (error) return cb(error)
 
-    self.bytes += offset // TODO: set after _sync
+    self.bytes += offset // TODO: set after _sync (have a ._bytes prop)
     for (var i = 0; i < batch.length; i++) {
       self.bitfield.set(self.blocks, true)
-      self.tree.set(2 * self.blocks++)
+      self.tree.set(2 * self.blocks++) // TODO: also set after _sync (have a ._blocks prop)
     }
 
     self._sync(cb)
@@ -413,14 +444,19 @@ Feed.prototype._readyAndAppend = function (batch, cb) {
   var self = this
   this.ready(function (err) {
     if (err) return cb(err)
-    self._batch(batch, cb)
+    self._append(batch, cb)
   })
 }
 
-Feed.prototype._sync = function (cb) { // TODO: lock it
+Feed.prototype._sync = function (cb) { // TODO: mutex it
   var missing = this.bitfield.updates.length + this.tree.bitfield.updates.length + 1
   var next = null
   var error = null
+
+  // All data / nodes have been written now. We still need to update the bitfields though
+  // TODO: if the program fails during this write the bitfield might not have been fully written
+  // HOWEVER, we can easily recover from this by traversing the tree and checking if the nodes exists
+  // on disk. So if a get fails, it should try and recover once.
 
   while (next = this.bitfield.nextUpdate()) {
     this._storage.dataBitfield.write(next.offset, next.buffer, ondone)
@@ -473,4 +509,10 @@ function addSize (size, node) {
 
 function isObject (val) {
   return !!(val && typeof val === 'object' && !Buffer.isBuffer(val))
+}
+
+function calloc (n) {
+  var buf = new Buffer(n)
+  buf.fill(0)
+  return buf
 }
