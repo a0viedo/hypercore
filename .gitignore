@@ -3,3 +3,4 @@ node_modules
 sandbox
 bench/static
 bench/live
+tmp
