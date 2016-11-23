@@ -25,6 +25,3 @@ function write (data, enc, cb) {
     cb(null, data)
   })
 }
-
-process.title = 'testme'
-setInterval(function () {}, 1000)
