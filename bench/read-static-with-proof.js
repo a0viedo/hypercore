@@ -1,5 +1,4 @@
 var raf = require('random-access-file')
-var explain = require('explain-error')
 var through = require('through2')
 var hypercore = require('../')
 

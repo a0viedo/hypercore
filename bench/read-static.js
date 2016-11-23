@@ -1,5 +1,4 @@
 var raf = require('random-access-file')
-var explain = require('explain-error')
 var hypercore = require('../')
 
 var feed = hypercore({live: false}, function (name) {

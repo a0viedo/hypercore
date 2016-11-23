@@ -1,6 +1,5 @@
 var uint64be = require('uint64be')
 var flat = require('flat-tree')
-var lru = require('lru')
 
 module.exports = Storage
 
