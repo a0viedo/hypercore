@@ -17,14 +17,6 @@ function Storage (create) {
   this.treeBitfield = create('sleep.tree.bitfield')
 }
 
-Storage.prototype.putBitfield = function (index, part, cb) {
-  this.dataBitfield.write(index * 1024, part, cb)
-}
-
-Storage.prototype.getBitfield = function (index, cb) {
-  this.dataBitfield.read(index * 1024, 1024, cb)
-}
-
 Storage.prototype.putData = function (index, data, nodes, cb) {
   if (!cb) cb = noop
   var self = this
@@ -75,14 +67,16 @@ Storage.prototype.dataOffset = function (index, cachedNodes, cb) {
 }
 
 Storage.prototype.putInfo = function (info, cb) {
-  var buf = new Buffer(104)
-  uint64be.encode(info.blocks, buf, 0)
+  var buf = new Buffer(105)
 
-  if (info.key) info.key.copy(buf, 8)
-  else blank.copy(buf, 8)
+  if (info.key) info.key.copy(buf, 0)
+  else blank.copy(buf, 0)
 
-  if (info.secretKey) info.secretKey.copy(buf, 40)
-  else blank.copy(buf, 40)
+  if (info.secretKey) info.secretKey.copy(buf, 32)
+  else blank.copy(buf, 32)
+
+  buf[96] = info.live ? 1 : 0
+  uint64be.encode(info.blocks, buf, 97)
 
   this.info.write(0, buf, cb)
 }
@@ -90,15 +84,14 @@ Storage.prototype.putInfo = function (info, cb) {
 Storage.prototype.getInfo = function (cb) {
   var self = this
 
-  this.info.read(0, 104, function (err, buf) {
+  this.info.read(0, 105, function (err, buf) {
     if (err) return cb(err)
 
-    var secretKey = buf.slice(40)
-
     cb(null, {
-      blocks: uint64be.decode(buf, 0),
-      key: notBlank(buf.slice(8, 40)),
-      secretKey: notBlank(secretKey)
+      key: notBlank(buf.slice(0, 32)),
+      secretKey: notBlank(buf.slice(32, 96)),
+      live: !!buf[96],
+      blocks: uint64be.decode(buf, 97)
     })
   })
 }

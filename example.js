@@ -11,7 +11,7 @@ var w = hypercore({valueEncoding: 'json'}, function (name) {
 })
 
 w.ready(function () {
-  console.log('Contains %d blocks and %d bytes\n', w.blocks, w.bytes)
+  console.log('Contains %d blocks and %d bytes (live: %s)\n', w.blocks, w.bytes, w.live)
 })
 
 w.createReadStream()
@@ -28,4 +28,8 @@ w.append({
 
 w.append({
   hola: 'mundo'
+})
+
+w.flush(function () {
+  console.log('Appended 3 more blocks')
 })

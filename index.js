@@ -81,13 +81,13 @@ Feed.prototype._open = function (cb) {
 
   this._storage.getInfo(function (_, info) {
     if (!info) return onroots(null, [])
-    if (self._reset) info = {key: null, secretKey: null, blocks: 0}
+    if (self._reset) info = {key: null, secretKey: null, live: false, blocks: 0}
     if (info.key && self.key && !equals(info.key, self.key)) return cb(new Error('Another hypercore is stored here'))
 
     self.blocks = info.blocks
     self.key = info.key
     self.secretKey = info.secretKey
-    // TODO: persist wheather or not it is live!
+    self.live = info.live
 
     var pages = Math.ceil(self.blocks / 8 / pageSize)
     var treePages = 2 * pages
