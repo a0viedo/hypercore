@@ -1,5 +1,6 @@
 var uint64be = require('uint64be')
 var flat = require('flat-tree')
+var alru = require('array-lru')
 
 module.exports = Storage
 
@@ -10,6 +11,7 @@ blank.fill(0)
 function Storage (create) {
   if (!(this instanceof Storage)) return new Storage(create)
 
+  this.cache = alru(65536, {indexedValues: true})
   this.info = create('sleep.info')
   this.tree = create('sleep.tree')
   this.data = create('sleep.data')
@@ -97,6 +99,11 @@ Storage.prototype.getInfo = function (cb) {
 }
 
 Storage.prototype.getNode = function (index, cb) {
+  if (this.cache) {
+    var cached = this.cache.get(index)
+    if (cached) return cb(null, cached)
+  }
+
   var leaf = !(index & 1)
   var offset = 40 * index + 64 * Math.ceil(index / 2)
   var length = leaf ? 104 : 40
@@ -111,12 +118,15 @@ Storage.prototype.getNode = function (index, cb) {
     if (!size && !notBlank(hash)) return cb(new Error('Index not found ' + index + ' '))
 
     var val = new Node(index, hash, size, leaf ? notBlank(buf.slice(40)) : null)
+    if (self.cache) self.cache.set(index, val)
     cb(null, val)
   })
 }
 
 Storage.prototype.putNode = function (index, node, cb) {
   if (!cb) cb = noop
+
+  if (this.cache) this.cache.set(index, node)
 
   var leaf = !(index & 1)
   var length = leaf ? 104 : 40
