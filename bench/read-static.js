@@ -1,7 +1,7 @@
 var raf = require('random-access-file')
 var hypercore = require('../')
 
-var feed = hypercore({live: false}, function (name) {
+var feed = hypercore(function (name) {
   return raf(__dirname + '/static/' + name)
 })
 
