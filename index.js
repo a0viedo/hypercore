@@ -42,6 +42,7 @@ function Feed (key, opts, file) {
   this.blocks = 0
   this.bytes = 0
   this.key = key || null
+  this.discoveryKey = this.key && hash.discoveryKey(this.key)
   this.secretKey = null
   this.tree = treeIndex(bitfield({trackUpdates: true}))
   this.bitfield = bitfield({trackUpdates: true})
@@ -72,6 +73,8 @@ Feed.prototype.replicate = function () {
 }
 
 Feed.prototype._open = function (cb) {
+  // TODO: refactor, this seems a bit more complex that it should be
+
   var self = this
   var pageSize = this.bitfield.pageSize
   var blank = calloc(pageSize)
@@ -79,13 +82,16 @@ Feed.prototype._open = function (cb) {
   var roots = null
   var missing = 1
 
-  this._storage.getInfo(function (_, info) {
+  this._storage.getInfo(oninfo)
+
+  function oninfo (_, info) {
     if (!info) return onroots(null, [])
     if (self._reset) info = {key: null, secretKey: null, live: false, blocks: 0}
     if (info.key && self.key && !equals(info.key, self.key)) return cb(new Error('Another hypercore is stored here'))
 
     self.blocks = info.blocks
     self.key = info.key
+    self.discoveryKey = self.key && hash.discoveryKey(self.key)
     self.secretKey = info.secretKey
     self.live = info.live
 
@@ -99,7 +105,7 @@ Feed.prototype._open = function (cb) {
     for (i = 0; i < treePages; i++) readBitPage(self._storage.treeBitfield, self.tree.bitfield, i * pageSize)
 
     self._roots(self.blocks, onroots)
-  })
+  }
 
   function readBitPage (storage, bitfield, offset) {
     storage.read(offset, pageSize, function (_, buf) {
@@ -115,8 +121,9 @@ Feed.prototype._open = function (cb) {
 
     if (!self.key && self.live) {
       var pair = signatures.keyPair()
-      self.secretKey = pair.secretKey
       self.key = pair.publicKey
+      self.discoveryKey = self.key && hash.discoveryKey(self.key)
+      self.secretKey = pair.secretKey
     }
 
     self.bytes = roots.reduce(addSize, 0)
