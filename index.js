@@ -46,8 +46,10 @@ function Feed (key, opts, file) {
   this.secretKey = null
   this.tree = treeIndex(bitfield({trackUpdates: true}))
   this.bitfield = bitfield({trackUpdates: true})
-  this.ready = thunky(open)
+  this.writable = false
+  this.readable = true // for completeness
   this.opened = false
+  this.ready = thunky(open)
 
   this._reset = !!opts.reset
   this._merkle = null
@@ -56,6 +58,10 @@ function Feed (key, opts, file) {
 
   // Switch to ndjson encoding if JSON is used. That way data files parse like ndjson \o/
   this._codec = codecs(opts.valueEncoding === 'json' ? 'ndjson' : opts.valueEncoding)
+
+  // for replication
+  this._selection = []
+  this._peers = []
 
   function work (values, cb) {
     self._append(values, cb)
@@ -69,7 +75,7 @@ function Feed (key, opts, file) {
 inherits(Feed, events.EventEmitter)
 
 Feed.prototype.replicate = function () {
-  return null
+  return require('./replicate')(this)
 }
 
 Feed.prototype._open = function (cb) {
@@ -91,7 +97,6 @@ Feed.prototype._open = function (cb) {
 
     self.blocks = info.blocks
     self.key = info.key
-    self.discoveryKey = self.key && hash.discoveryKey(self.key)
     self.secretKey = info.secretKey
     self.live = info.live
 
@@ -110,6 +115,7 @@ Feed.prototype._open = function (cb) {
   function readBitPage (storage, bitfield, offset) {
     storage.read(offset, pageSize, function (_, buf) {
       // TODO: check if buf is 0xffff...ff and just set a flag if that is the case
+      // Should reduce memory foot print a little bit (optimization)
       if (buf && !equals(buf, blank)) bitfield.setBuffer(offset, buf)
       done()
     })
@@ -122,13 +128,14 @@ Feed.prototype._open = function (cb) {
     if (!self.key && self.live) {
       var pair = signatures.keyPair()
       self.key = pair.publicKey
-      self.discoveryKey = self.key && hash.discoveryKey(self.key)
       self.secretKey = pair.secretKey
     }
 
     self.bytes = roots.reduce(addSize, 0)
     self._merkle = merkle(hash, roots)
     self.opened = true
+    self.discoveryKey = self.key && hash.discoveryKey(self.key)
+    self.writable = !!(!self.key || self.secretKey)
     self.emit('ready')
 
     cb(null)
@@ -191,12 +198,11 @@ Feed.prototype._readyAndProof = function (index, opts, cb) {
 }
 
 Feed.prototype.put = function (index, data, proof, cb) {
-  this.putBuffer(index, this._codec.encode(data), proof, cb)
+  if (!this.opened) return this._readyAndPut(index, data, proof, cb)
+  this._putBuffer(index, this._codec.encode(data), proof, cb)
 }
 
-Feed.prototype.putBuffer = function (index, data, proof, cb) {
-  if (!this.opened) return this._readyAndPut(index, data, proof, cb)
-
+Feed.prototype._putBuffer = function (index, data, proof, cb) {
   var self = this
   var trusted = -1
   var missing = []
@@ -253,7 +259,7 @@ Feed.prototype._readyAndPut = function (index, data, proof, cb) {
   var self = this
   this.ready(function (err) {
     if (err) return cb(err)
-    self.putBuffer(index, data, proof, cb)
+    self.put(index, data, proof, cb)
   })
 }
 
@@ -342,12 +348,21 @@ Feed.prototype._verify = function (index, data, proof, missing, trusted) {
   }
 }
 
-Feed.prototype.get = function (index, cb) {
-  this.getBuffer(index, this._codec === codecs.binary ? cb : this._wrapCodec(cb))
+Feed.prototype.has = function (index) {
+  return this.bitfield.get(index)
 }
 
-Feed.prototype.getBuffer = function (index, cb) {
+Feed.prototype.get = function (index, cb) {
   if (!this.opened) return this._readyAndGet(index, cb)
+
+  if (!this.has(index)) {
+    if (this.writable) return cb(new Error('Index not written'))
+    this._selection.push({index: index, cb: cb})
+    for (var i = 0; i < this._peers.length; i++) this._peers[i].update()
+    return
+  }
+
+  if (this._codec !== codecs.binary) cb = this._wrapCodec(cb)
   this._storage.getData(index, cb)
 }
 
@@ -355,7 +370,7 @@ Feed.prototype._readyAndGet = function (index, cb) {
   var self = this
   this.ready(function (err) {
     if (err) return cb(err)
-    self.getBuffer(index, cb)
+    self.get(index, cb)
   })
 }
 
@@ -402,8 +417,7 @@ Feed.prototype.finalize = function (cb) {
 }
 
 Feed.prototype.append = function (batch, cb) {
-  if (Array.isArray(batch)) this._batch(batch, cb || noop)
-  else this._batch([batch], cb || noop)
+  this._batch(Array.isArray(batch) ? batch : [batch], cb || noop)
 }
 
 Feed.prototype.flush = function (cb) {

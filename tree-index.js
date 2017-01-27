@@ -78,7 +78,7 @@ TreeIndex.prototype.digest = function (index) {
 
   var digest = 0
   var next = flat.sibling(index)
-  var max = this.bitfield.buffer.length * 8
+  var max = this.bitfield.length // TODO: this is growing a lot. how to track right most bit instead?
   var bit = 2
   var depth = flat.depth(index)
   var parent = flat.parent(next, depth++)

@@ -12,11 +12,14 @@ var w = hypercore({valueEncoding: 'json'}, function (name) {
 
 w.ready(function () {
   console.log('Contains %d blocks and %d bytes (live: %s)\n', w.blocks, w.bytes, w.live)
+
+  w.createReadStream()
+    .on('data', console.log)
+    .on('end', console.log.bind(console, '\n(end)'))
 })
 
-w.createReadStream()
-  .on('data', console.log)
-  .on('end', console.log.bind(console, '\n(end)'))
+return
+
 
 w.append({
   hello: 'world'
