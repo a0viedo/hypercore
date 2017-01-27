@@ -10,6 +10,7 @@ var thunky = require('thunky')
 var batcher = require('atomic-batcher')
 var inherits = require('inherits')
 var events = require('events')
+var randomBytes = require('randombytes')
 var treeIndex = require('./tree-index')
 var storage = require('./storage')
 var hash = require('./hash')
@@ -38,6 +39,7 @@ function Feed (key, opts, file) {
 
   var self = this
 
+  this.id = opts.id || randomBytes(32)
   this.live = opts.live !== false
   this.blocks = 0
   this.bytes = 0

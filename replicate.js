@@ -5,7 +5,7 @@ var rle = require('bitfield-rle')
 module.exports = replicate
 
 function replicate (feed) {
-  var stream = protocol()
+  var stream = protocol({id: feed.id})
   var peer = new Peer()
 
   peer.stream = stream
@@ -35,6 +35,7 @@ function Peer () {
   this.feed = null
   this.channel = null
   this.remoteBitfield = bitfield()
+  this.remoteTree = bitfield()
 
   this.remoteRequests = []
   this.responses = []
@@ -81,7 +82,7 @@ function read (peer) {
 
   peer.feed._storage.getData(next.block, function (err, data) {
     if (err) return peer.destroy(err)
-    peer.feed.proof(next.block, {digest: next.nodes}, function (err, proof) {
+    peer.feed.proof(next.block, {digest: next.nodes, tree: peer.remoteTree}, function (err, proof) {
       if (err) return peer.destroy(err)
 
       peer.channel.data({
@@ -134,6 +135,5 @@ function ondata (data) {
 }
 
 function expand (buf, length) {
-  console.log('should expand the buffer with 0s')
-  throw new Error('stop')
+  throw new Error('should expand the buffer with 0s')
 }

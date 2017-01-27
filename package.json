@@ -17,6 +17,7 @@
     "hypercore-protocol": "mafintosh/hypercore-protocol#v6",
     "inherits": "^2.0.3",
     "merkle-tree-stream": "^3.0.3",
+    "randombytes": "^2.0.3",
     "sodium-signatures": "^1.4.1",
     "sparse-bitfield": "^2.0.1",
     "thunky": "^1.0.1",
