@@ -94,7 +94,7 @@ Feed.prototype._open = function (cb) {
 
   function oninfo (_, info) {
     if (!info) return onroots(null, [])
-    if (self._reset) info = {key: null, secretKey: null, live: false, blocks: 0}
+    if (self._reset) info = {key: self.key || null, secretKey: null, live: self.live, blocks: 0}
     if (info.key && self.key && !equals(info.key, self.key)) return cb(new Error('Another hypercore is stored here'))
 
     self.blocks = info.blocks
