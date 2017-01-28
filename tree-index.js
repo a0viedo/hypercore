@@ -100,7 +100,7 @@ TreeIndex.prototype.digest = function (index) {
   return digest
 }
 
-TreeIndex.prototype.roots = function () {
+TreeIndex.prototype.blocks = function () {
   var top = 0
   var next = 0
   var max = this.bitfield.length
@@ -110,7 +110,11 @@ TreeIndex.prototype.roots = function () {
     if (this.get(next)) top = next
   }
 
-  return this.get(top) ? flat.fullRoots(this.verifiedBy(top)) : []
+  return (this.get(top) ? this.verifiedBy(top) : 0) / 2
+}
+
+TreeIndex.prototype.roots = function () {
+  return flat.fullRoots(2 * this.blocks())
 }
 
 TreeIndex.prototype.verifiedBy = function (index, nodes) {

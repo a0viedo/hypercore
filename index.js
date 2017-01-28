@@ -14,6 +14,7 @@ var randomBytes = require('randombytes')
 var treeIndex = require('./tree-index')
 var storage = require('./storage')
 var hash = require('./hash')
+var replicate = null
 
 module.exports = Feed
 
@@ -46,8 +47,8 @@ function Feed (key, opts, file) {
   this.key = key || null
   this.discoveryKey = this.key && hash.discoveryKey(this.key)
   this.secretKey = null
-  this.tree = treeIndex(bitfield({trackUpdates: true}))
-  this.bitfield = bitfield({trackUpdates: true})
+  this.tree = treeIndex(bitfield({trackUpdates: true, pageSize: 1024}))
+  this.bitfield = bitfield({trackUpdates: true, pageSize: 1024})
   this.writable = false
   this.readable = true // for completeness
   this.opened = false
@@ -77,76 +78,108 @@ function Feed (key, opts, file) {
 inherits(Feed, events.EventEmitter)
 
 Feed.prototype.replicate = function () {
-  return require('./replicate')(this)
+  // Lazy load replication deps
+  if (!replicate) replicate = require('./replicate')
+  return replicate(this)
 }
 
 Feed.prototype._open = function (cb) {
-  // TODO: refactor, this seems a bit more complex that it should be
-
   var self = this
-  var pageSize = this.bitfield.pageSize
-  var blank = calloc(pageSize)
-  var error = null
-  var roots = null
-  var missing = 1
 
-  this._storage.getInfo(oninfo)
+  this._storage.open(onopen)
 
-  function oninfo (_, info) {
-    if (!info) return onroots(null, [])
-    if (self._reset) info = {key: self.key || null, secretKey: null, live: self.live, blocks: 0}
-    if (info.key && self.key && !equals(info.key, self.key)) return cb(new Error('Another hypercore is stored here'))
+  function onopen (err, state) {
+    if (err) return cb(err)
 
-    self.blocks = info.blocks
-    self.key = info.key
-    self.secretKey = info.secretKey
-    self.live = info.live
-
-    var pages = Math.ceil(self.blocks / 8 / pageSize)
-    var treePages = 2 * pages
-    var i = 0
-
-    missing += pages + treePages
-
-    for (i = 0; i < pages; i++) readBitPage(self._storage.dataBitfield, self.bitfield, i * pageSize)
-    for (i = 0; i < treePages; i++) readBitPage(self._storage.treeBitfield, self.tree.bitfield, i * pageSize)
-
-    self._roots(self.blocks, onroots)
-  }
-
-  function readBitPage (storage, bitfield, offset) {
-    storage.read(offset, pageSize, function (_, buf) {
-      // TODO: check if buf is 0xffff...ff and just set a flag if that is the case
-      // Should reduce memory foot print a little bit (optimization)
-      if (buf && !equals(buf, blank)) bitfield.setBuffer(offset, buf)
-      done()
-    })
-  }
-
-  function done () {
-    if (--missing) return
-    if (error) return cb(err)
-
-    if (!self.key && self.live) {
-      var pair = signatures.keyPair()
-      self.key = pair.publicKey
-      self.secretKey = pair.secretKey
+    // if no key but we have data do a bitfield reset since we cannot verify the data.
+    if (!state.key && (state.treeBitfield.length || state.dataBitfield.length)) {
+      self._reset = true
     }
 
-    self.bytes = roots.reduce(addSize, 0)
-    self._merkle = merkle(hash, roots)
-    self.opened = true
-    self.discoveryKey = self.key && hash.discoveryKey(self.key)
-    self.writable = !!(!self.key || self.secretKey)
-    self.emit('ready')
+    if (self._reset) {
+      state.dataBitfield.fill(0)
+      state.treeBitfield.fill(0)
+      state.key = state.secretKey = null
+    }
 
-    cb(null)
-  }
+    var i = 0
 
-  function onroots (err, result) {
-    if (err) error = err
-    else roots = result
-    done()
+    for (i = 0; i < state.dataBitfield.length; i += 1024) {
+      self.bitfield.setBuffer(i, state.dataBitfield.slice(i, i + 1024))
+    }
+    for (i = 0; i < state.treeBitfield.length; i += 1024) {
+      self.tree.bitfield.setBuffer(i, state.treeBitfield.slice(i, i + 1024))
+    }
+
+    var len = bitfieldLength(state.treeBitfield)
+    if (len) {
+      // last node should be a factor of 2 (leaf node)
+      // if not, last write wasn't flushed completely and we need to find the
+      // last written leaf
+      if ((len & 1) === 0) {
+        len--
+        while (len > 0 && !self.tree.bitfield.get(len - 1)) len -= 2
+      }
+
+      if (len > 0) self.blocks = (len + 1) / 2
+    }
+
+
+    if (state.key && self.key && !equals(state.key, self.key)) {
+      return cb(new Error('Another hypercore is stored here'))
+    }
+
+    if (state.key) self.key = state.key
+    if (state.secretKey) self.secretKey = state.secretKey
+
+    if (self.blocks) self._storage.getNode(self.blocks * 2 - 2, onlastnode)
+    else onlastnode(null, null)
+
+    function onlastnode (err, node) {
+      if (err) return cb(err)
+
+      if (node) self.live = !!self.signature
+
+      if (!self.key && self.live) {
+        var keyPair = signatures.keyPair()
+        self.secretKey = keyPair.secretKey
+        self.key = keyPair.publicKey
+      }
+
+      self.writable = !!self.secretKey || self.key === null
+      self.discoveryKey = self.key && hash.discoveryKey(self.key)
+
+      var missing = 1 + (self.key ? 1 : 0) + (self.secretKey ? 1 : 0) + (self._reset ? 2 : 0)
+      var error = null
+
+      if (self.key) self._storage.key.write(0, self.key, done)
+      if (self.secretKey) self._storage.secretKey.write(0, self.secretKey, done)
+
+      if (self._reset) { // TODO: support storage.resize for this instead
+        self._storage.treeBitfield.write(0, state.treeBitfield, done)
+        self._storage.dataBitfield.write(0, state.dataBitfield, done)
+      }
+
+      done(null)
+
+      function done (err) {
+        if (err) error = err
+        if (--missing) return
+        if (error) return cb(error)
+        self._roots(self.blocks, onroots)
+      }
+
+      function onroots (err, roots) {
+        if (err) return cb(err)
+
+        self._merkle = merkle(hash, roots)
+        self.bytes = roots.reduce(addSize, 0)
+        self.opened = true
+        self.emit('ready')
+
+        cb(null)
+      }
+    }
   }
 }
 
@@ -415,7 +448,7 @@ Feed.prototype.createReadStream = function () {
 
 Feed.prototype.finalize = function (cb) {
   if (!this.key) this.key = hash.tree(this._merkle.roots)
-  this._storage.putInfo(this, cb)
+  this._storage.key.write(0, this.key, cb)
 }
 
 Feed.prototype.append = function (batch, cb) {
@@ -476,7 +509,7 @@ Feed.prototype._readyAndAppend = function (batch, cb) {
 }
 
 Feed.prototype._sync = function (cb) { // TODO: mutex it
-  var missing = this.bitfield.updates.length + this.tree.bitfield.updates.length + 1
+  var missing = this.bitfield.updates.length + this.tree.bitfield.updates.length
   var next = null
   var error = null
 
@@ -492,8 +525,6 @@ Feed.prototype._sync = function (cb) { // TODO: mutex it
   while (next = this.tree.bitfield.nextUpdate()) {
     this._storage.treeBitfield.write(next.offset, next.buffer, ondone)
   }
-
-  this._storage.putInfo(this, ondone)
 
   function ondone (err) {
     if (err) error = err
@@ -542,4 +573,22 @@ function calloc (n) {
   var buf = new Buffer(n)
   buf.fill(0)
   return buf
+}
+
+function bitfieldLength (buf) {
+  if (!buf.length) return 0
+
+  var max = buf.length - 1
+  while (max && !buf[max]) max--
+
+  var b = buf[max]
+  if (!b) return max * 8
+
+  var length = (max + 1) * 8
+
+  while (true) {
+    if (b & 1) return length
+    b >>= 1
+    length--
+  }
 }

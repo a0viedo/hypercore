@@ -12,11 +12,12 @@ function Storage (create) {
   if (!(this instanceof Storage)) return new Storage(create)
 
   this.cache = alru(65536, {indexedValues: true})
-  this.info = create('sleep.info')
-  this.tree = create('sleep.tree')
-  this.data = create('sleep.data')
-  this.dataBitfield = create('sleep.data.bitfield')
-  this.treeBitfield = create('sleep.tree.bitfield')
+  this.key = create('key')
+  this.secretKey = create('secret.key')
+  this.tree = create('tree')
+  this.data = create('data')
+  this.dataBitfield = create('data.bitfield')
+  this.treeBitfield = create('tree.bitfield')
 }
 
 Storage.prototype.putData = function (index, data, nodes, cb) {
@@ -68,36 +69,6 @@ Storage.prototype.dataOffset = function (index, cachedNodes, cb) {
   }
 }
 
-Storage.prototype.putInfo = function (info, cb) {
-  var buf = new Buffer(105)
-
-  if (info.key) info.key.copy(buf, 0)
-  else blank.copy(buf, 0)
-
-  if (info.secretKey) info.secretKey.copy(buf, 32)
-  else blank.copy(buf, 32)
-
-  buf[96] = info.live ? 1 : 0
-  uint64be.encode(info.blocks, buf, 97)
-
-  this.info.write(0, buf, cb)
-}
-
-Storage.prototype.getInfo = function (cb) {
-  var self = this
-
-  this.info.read(0, 105, function (err, buf) {
-    if (err) return cb(err)
-
-    cb(null, {
-      key: notBlank(buf.slice(0, 32)),
-      secretKey: notBlank(buf.slice(32, 96)),
-      live: !!buf[96],
-      blocks: uint64be.decode(buf, 97)
-    })
-  })
-}
-
 Storage.prototype.getNode = function (index, cb) {
   if (this.cache) {
     var cached = this.cache.get(index)
@@ -144,6 +115,48 @@ Storage.prototype.putNode = function (index, node, cb) {
   this.tree.write(offset, buf, cb)
 }
 
+Storage.prototype.open = function (cb) {
+  var error = null
+  var missing = 4
+
+  var result = {
+    treeBitfield: new Buffer(0),
+    dataBitfield: new Buffer(0),
+    secretKey: null,
+    key: null
+  }
+
+  readBitfield(this.treeBitfield, function (err, data) {
+    if (data) result.treeBitfield = data
+    done(err)
+  })
+
+  readBitfield(this.dataBitfield, function (err, data) {
+    if (data) result.dataBitfield = data
+    done(err)
+  })
+
+  // TODO: Improve the error handling here.
+  // I.e. if secretKey length === 64 and it fails, error
+
+  this.secretKey.read(0, 64, function (_, data) {
+    if (data) result.secretKey = data
+    done(null)
+  })
+
+  this.key.read(0, 32, function (_, data) {
+    if (data) result.key = data
+    done(null)
+  })
+
+  function done (err) {
+    if (err) error = err
+    if (--missing) return
+    if (error) cb(error)
+    else cb(null, result)
+  }
+}
+
 Storage.Node = Node
 
 function noop () {}
@@ -167,4 +180,23 @@ function notBlank (buf) {
     if (buf[i]) return buf
   }
   return null
+}
+
+function readBitfield (st, cb) {
+  st.open(function (err) {
+    if (err) return cb(err)
+    st.read(0, st.length, function (err, data) {
+      if (err) return cb(err)
+      cb(null, coerce(data))
+    })
+  })
+}
+
+function coerce (data) {
+  var remainder = 1024 - (data.length & 1023)
+  if (remainder === 1024) return data
+
+  var blank = new Buffer(remainder)
+  blank.fill(0)
+  return Buffer.concat([data, blank])
 }
