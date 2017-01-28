@@ -138,7 +138,7 @@ Feed.prototype._open = function (cb) {
     function onlastnode (err, node) {
       if (err) return cb(err)
 
-      if (node) self.live = !!self.signature
+      if (node) self.live = !!node.signature
 
       if (!self.key && self.live) {
         var keyPair = signatures.keyPair()
