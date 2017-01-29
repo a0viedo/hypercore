@@ -2,11 +2,12 @@
 // run. Can we gain massive perf by preallocating files?
 
 var hypercore = require('../../')
+var path = require('path')
 var raf = require('random-access-file')
 
 module.exports = function (dir, blockSize, count, finalize) {
   var feed = hypercore({live: !finalize, reset: true}, function (name) {
-    return raf(__dirname + '/../cores/' + dir + '/' + name)
+    return raf(path.join(__dirname, '../cores', dir, name))
   })
 
   var then = Date.now()

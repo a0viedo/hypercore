@@ -1,9 +1,10 @@
 var raf = require('random-access-file')
+var path = require('path')
 var hypercore = require('../../')
 
 module.exports = function (dir, proof) {
   var feed = hypercore(function (name) {
-    return raf(__dirname + '/../cores/' + dir + '/' + name)
+    return raf(path.join(__dirname, '../cores', dir, name))
   })
 
   var then = Date.now()

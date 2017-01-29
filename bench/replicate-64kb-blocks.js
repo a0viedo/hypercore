@@ -1,6 +1,7 @@
 var hypercore = require('../')
 var raf = require('random-access-file')
 var shuffle = require('shuffle-array')
+var path = require('path')
 
 var source = hypercore(data('64kb'))
 
@@ -19,7 +20,7 @@ source.ready(function () {
   for (var i = 0; i < source.blocks; i++) missing.push(i)
 
   shuffle(missing)
-  for (var i = 0; i < 16; i++) copy(null)
+  for (var j = 0; j < 16; j++) copy(null)
 
   function copy (err, data) {
     if (err) throw err
@@ -45,6 +46,6 @@ source.ready(function () {
 
 function data (folder) {
   return function (name) {
-    return raf(__dirname + '/cores/' + folder + '/' + name)
+    return raf(path.join(__dirname, 'cores', folder, name))
   }
 }

@@ -1,3 +1,4 @@
+var path = require('path')
 var raf = require('random-access-file')
 var speedometer = require('speedometer')
 var hypercore = require('../../')
@@ -5,7 +6,7 @@ var hypercore = require('../../')
 module.exports = function (dir, proof) {
   var speed = speedometer()
   var feed = hypercore(function (name) {
-    return raf(__dirname + '/../cores/' + dir + '/' + name)
+    return raf(path.join(__dirname, '../cores', dir, name))
   })
 
   feed.ready(function () {

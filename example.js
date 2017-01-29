@@ -1,11 +1,8 @@
 var hypercore = require('./')
-var ram = require('random-access-memory')
 var raf = require('random-access-file')
 
-var bulk = require('bulk-write-stream')
-var fs = require('fs')
+var append = false
 
-var then = Date.now()
 var w = hypercore({valueEncoding: 'json'}, function (name) {
   return raf('tmp/' + name)
 })
@@ -18,21 +15,20 @@ w.ready(function () {
     .on('end', console.log.bind(console, '\n(end)'))
 })
 
-return
+if (append) {
+  w.append({
+    hello: 'world'
+  })
 
+  w.append({
+    hej: 'verden'
+  })
 
-w.append({
-  hello: 'world'
-})
+  w.append({
+    hola: 'mundo'
+  })
 
-w.append({
-  hej: 'verden'
-})
-
-w.append({
-  hola: 'mundo'
-})
-
-w.flush(function () {
-  console.log('Appended 3 more blocks')
-})
+  w.flush(function () {
+    console.log('Appended 3 more blocks')
+  })
+}

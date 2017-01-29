@@ -124,7 +124,6 @@ Feed.prototype._open = function (cb) {
       if (len > 0) self.blocks = (len + 1) / 2
     }
 
-
     if (state.key && self.key && !equals(state.key, self.key)) {
       return cb(new Error('Another hypercore is stored here'))
     }
@@ -514,15 +513,20 @@ Feed.prototype._sync = function (cb) { // TODO: mutex it
   var error = null
 
   // All data / nodes have been written now. We still need to update the bitfields though
-  // TODO: if the program fails during this write the bitfield might not have been fully written
+
+  // TODO 1: if the program fails during this write the bitfield might not have been fully written
   // HOWEVER, we can easily recover from this by traversing the tree and checking if the nodes exists
   // on disk. So if a get fails, it should try and recover once.
 
-  while (next = this.bitfield.nextUpdate()) {
+  // TODO 2: if .writable append bitfield updates into a single buffer for extra perf
+  // Added benefit is that if the program exits while flushing the bitfield the feed will only get
+  // truncated and not have missing chunks which is what you expect.
+
+  while ((next = this.bitfield.nextUpdate()) !== null) {
     this._storage.dataBitfield.write(next.offset, next.buffer, ondone)
   }
 
-  while (next = this.tree.bitfield.nextUpdate()) {
+  while ((next = this.tree.bitfield.nextUpdate()) !== null) {
     this._storage.treeBitfield.write(next.offset, next.buffer, ondone)
   }
 
@@ -536,7 +540,6 @@ Feed.prototype._sync = function (cb) { // TODO: mutex it
 Feed.prototype._roots = function (index, cb) {
   var roots = flat.fullRoots(2 * index)
   var result = new Array(roots.length)
-  var self = this
   var pending = roots.length
   var error = null
 
@@ -567,12 +570,6 @@ function addSize (size, node) {
 
 function isObject (val) {
   return !!(val && typeof val === 'object' && !Buffer.isBuffer(val))
-}
-
-function calloc (n) {
-  var buf = new Buffer(n)
-  buf.fill(0)
-  return buf
 }
 
 function bitfieldLength (buf) {
