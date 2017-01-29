@@ -115,6 +115,24 @@ Storage.prototype.putNode = function (index, node, cb) {
   this.tree.write(offset, buf, cb)
 }
 
+Storage.prototype.close = function (cb) {
+  var missing = 6
+  var error = null
+
+  close(this.treeBitfield, done)
+  close(this.dataBitfield, done)
+  close(this.tree, done)
+  close(this.data, done)
+  close(this.key, done)
+  close(this.secretKey, done)
+
+  function done (err) {
+    if (err) error = err
+    if (--missing) return
+    cb(error)
+  }
+}
+
 Storage.prototype.open = function (cb) {
   var error = null
   var missing = 4
@@ -199,4 +217,9 @@ function coerce (data) {
   var blank = new Buffer(remainder)
   blank.fill(0)
   return Buffer.concat([data, blank])
+}
+
+function close (st, cb) {
+  if (st.close) st.close(cb)
+  else cb()
 }

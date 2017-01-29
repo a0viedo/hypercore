@@ -458,6 +458,14 @@ Feed.prototype.flush = function (cb) {
   this._batch([], cb)
 }
 
+Feed.prototype.close = function (cb) {
+  var self = this
+
+  this.ready(function () {
+    self._storage.close(cb)
+  })
+}
+
 Feed.prototype._append = function (batch, cb) {
   if (!this.opened) return this._readyAndAppend(batch, cb)
 
