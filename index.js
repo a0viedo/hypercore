@@ -399,6 +399,17 @@ Feed.prototype._verify = function (index, data, proof, missing, trusted) {
   }
 }
 
+Feed.prototype._announce = function (start) {
+  var cnt = this._peers.length
+  if (!cnt) return
+
+  var message = {
+    start: start
+  }
+
+  for (var i = 0; i < cnt; i++) this._peers.have(message)
+}
+
 Feed.prototype.has = function (index) {
   return this.bitfield.get(index)
 }

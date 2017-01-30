@@ -1,5 +1,7 @@
 var bitfield = require('sparse-bitfield')
 var protocol = require('hypercore-protocol')
+var set = require('unordered-set')
+var unordered = require('unordered-array-remove')
 var rle = require('bitfield-rle')
 
 module.exports = replicate
@@ -20,7 +22,7 @@ function replicate (feed, stream) {
     if (stream.destroyed) return
     if (err) return stream.destroy(err)
 
-    feed._peers.push(peer)
+    set.add(feed._peers, peer)
     peer.channel = stream.open(feed.key)
     peer.channel.state = peer
 
@@ -41,15 +43,18 @@ function replicate (feed, stream) {
 }
 
 function Peer () {
-  var self = this
-
   this.stream = null
   this.feed = null
   this.channel = null
   this.remoteBitfield = bitfield()
   this.destroyed = false
 
+  this._index = 0 // for the set
   this._reserved = bitfield()
+}
+
+Peer.prototype.have = function (message) {
+  this.channel.have(message)
 }
 
 Peer.prototype.update = function () {
@@ -73,7 +78,8 @@ Peer.prototype.update = function () {
 Peer.prototype.destroy = function (err) {
   if (this.destroyed) return
   this.destroyed = true
-  this.stream.destroy()
+  set.remote(this.feed._peers, this)
+  this.stream.destroy(err)
 }
 
 function onhave (message) {
@@ -96,8 +102,6 @@ function onwant () {
 
 function onrequest (data) {
   var peer = this.state
-  var buffer = null
-  var proof = null
 
   peer.feed.proof(data.block, {digest: data.nodes}, function (err, proof) {
     if (err) return peer.destroy(err)
@@ -125,13 +129,11 @@ function ondata (data) {
 }
 
 function drain (peer, block) {
-  var not = true
   for (var i = 0; i < peer.feed._selection.length; i++) {
     var s = peer.feed._selection[i]
     if (s.index !== block) continue
 
-    peer.feed._selection.splice(i--, 1)
-    not = false
+    unordered.remove(peer.feed._selection, i--)
 
     if (s.get) {
       peer.feed.get(s.index, s.callback)
@@ -139,7 +141,7 @@ function drain (peer, block) {
       s.callback(null)
     }
   }
-if (not) console.log('whooopsie')
+
   peer.update()
 }
 

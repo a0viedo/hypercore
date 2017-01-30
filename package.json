@@ -21,7 +21,9 @@
     "sodium-signatures": "^1.4.1",
     "sparse-bitfield": "^2.0.1",
     "thunky": "^1.0.1",
-    "uint64be": "^2.0.1"
+    "uint64be": "^2.0.1",
+    "unordered-array-remove": "^1.0.2",
+    "unordered-set": "^2.0.0"
   },
   "devDependencies": {
     "random-access-file": "^1.3.1",
