@@ -182,6 +182,23 @@ Feed.prototype._open = function (cb) {
   }
 }
 
+Feed.prototype.download = function (index, cb) {
+  this._selection.push({
+    index: index,
+    get: false,
+    callback: cb
+  })
+}
+
+Feed.prototype.undownload = function (index, cb) {
+  for (var i = 0; i < this._selection.length; i++) {
+    if (this._selection[i].index === index) {
+      this._selection.splice(i, 1)
+      return
+    }
+  }
+}
+
 Feed.prototype.proof = function (index, opts, cb) {
   if (typeof opts === 'function') return this.proof(index, null, opts)
   if (!this.opened) return this._readyAndProof(index, opts, cb)
@@ -391,7 +408,7 @@ Feed.prototype.get = function (index, cb) {
 
   if (!this.has(index)) {
     if (this.writable) return cb(new Error('Block not written'))
-    this._selection.push({index: index, cb: cb})
+    this._selection.push({index: index, get: true, callback: cb})
     for (var i = 0; i < this._peers.length; i++) this._peers[i].update()
     return
   }

@@ -4,18 +4,23 @@ var rle = require('bitfield-rle')
 
 module.exports = replicate
 
-function replicate (feed) {
-  var stream = protocol({id: feed.id})
+function replicate (feed, stream) {
+  if (!stream) stream = protocol({id: feed.id})
+
   var peer = new Peer()
 
   peer.stream = stream
   peer.feed = feed
 
   stream.on('close', function () {
-    console.log('TODO: replication stream closed. clean up')
+    if (peer.channel) peer.destroy()
   })
 
-  feed.ready(function () {
+  feed.ready(function (err) {
+    if (stream.destroyed) return
+    if (err) return stream.destroy(err)
+
+    feed._peers.push(peer)
     peer.channel = stream.open(feed.key)
     peer.channel.state = peer
 
@@ -24,11 +29,12 @@ function replicate (feed) {
     peer.channel.on('request', onrequest)
     peer.channel.on('data', ondata)
 
-    feed._peers.push(peer)
     peer.channel.have({
       start: 0,
       bitfield: rle.encode(feed.bitfield.toBuffer())
     })
+
+    peer.update()
   })
 
   return stream
@@ -41,6 +47,8 @@ function Peer () {
   this.feed = null
   this.channel = null
   this.remoteBitfield = bitfield()
+  this.destroyed = false
+
   this._reserved = bitfield()
 }
 
@@ -63,7 +71,9 @@ Peer.prototype.update = function () {
 }
 
 Peer.prototype.destroy = function (err) {
-  console.log('TODO: should destroy the stream', err)
+  if (this.destroyed) return
+  this.destroyed = true
+  this.stream.destroy()
 }
 
 function onhave (message) {
@@ -115,13 +125,22 @@ function ondata (data) {
 }
 
 function drain (peer, block) {
+  var not = true
   for (var i = 0; i < peer.feed._selection.length; i++) {
     var s = peer.feed._selection[i]
     if (s.index !== block) continue
 
     peer.feed._selection.splice(i--, 1)
-    peer.feed.get(s.index, s.cb)
+    not = false
+
+    if (s.get) {
+      peer.feed.get(s.index, s.callback)
+    } else if (s.callback) {
+      s.callback(null)
+    }
   }
+if (not) console.log('whooopsie')
+  peer.update()
 }
 
 function expand (buf, length) {
