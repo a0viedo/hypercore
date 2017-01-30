@@ -312,7 +312,7 @@ Feed.prototype._commit = function (index, data, nodes, cb) {
     if (error) return cb(error)
     for (var i = 0; i < nodes.length; i++) self.tree.set(nodes[i].index)
     self.tree.set(2 * index)
-    self.bitfield.set(index, true)
+    if (self.bitfield.set(index, true)) self.emit('download', index, data)
     self._sync(cb)
   }
 }
@@ -390,7 +390,7 @@ Feed.prototype.get = function (index, cb) {
   if (!this.opened) return this._readyAndGet(index, cb)
 
   if (!this.has(index)) {
-    if (this.writable) return cb(new Error('Index not written'))
+    if (this.writable) return cb(new Error('Block not written'))
     this._selection.push({index: index, cb: cb})
     for (var i = 0; i < this._peers.length; i++) this._peers[i].update()
     return

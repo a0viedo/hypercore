@@ -11,6 +11,10 @@ function replicate (feed) {
   peer.stream = stream
   peer.feed = feed
 
+  stream.on('close', function () {
+    console.log('TODO: replication stream closed. clean up')
+  })
+
   feed.ready(function () {
     peer.channel = stream.open(feed.key)
     peer.channel.state = peer
@@ -31,14 +35,13 @@ function replicate (feed) {
 }
 
 function Peer () {
+  var self = this
+
   this.stream = null
   this.feed = null
   this.channel = null
   this.remoteBitfield = bitfield()
-  this.remoteTree = bitfield()
-
-  this.remoteRequests = []
-  this.responses = []
+  this._reserved = bitfield()
 }
 
 Peer.prototype.update = function () {
@@ -46,7 +49,11 @@ Peer.prototype.update = function () {
 
   for (var i = 0; i < selection.length; i++) {
     var s = selection[i]
+
     if (!this.remoteBitfield.get(s.index)) continue
+
+    if (this._reserved.get(s.index)) continue
+    this._reserved.set(s.index, true)
 
     this.channel.request({
       block: s.index,
@@ -56,7 +63,7 @@ Peer.prototype.update = function () {
 }
 
 Peer.prototype.destroy = function (err) {
-  console.log('should destroy the stream', err)
+  console.log('TODO: should destroy the stream', err)
 }
 
 function onhave (message) {
@@ -77,61 +84,44 @@ function onwant () {
 
 }
 
-function read (peer) {
-  var next = peer.remoteRequests[0]
+function onrequest (data) {
+  var peer = this.state
+  var buffer = null
+  var proof = null
 
-  peer.feed._storage.getData(next.block, function (err, data) {
+  peer.feed.proof(data.block, {digest: data.nodes}, function (err, proof) {
     if (err) return peer.destroy(err)
-    peer.feed.proof(next.block, {digest: next.nodes, tree: peer.remoteTree}, function (err, proof) {
+    peer.feed._storage.getData(data.block, function (err, buffer) {
       if (err) return peer.destroy(err)
 
+      peer.feed.emit('upload', data.block, buffer, proof)
       peer.channel.data({
-        block: next.block,
-        value: data,
+        block: data.block,
+        value: buffer,
         nodes: proof.nodes,
         signature: proof.signature
       })
-
-      peer.remoteRequests.shift()
-      if (peer.remoteRequests.length) read(peer)
     })
   })
 }
 
-function write (peer) {
-  var next = peer.responses[0]
+function ondata (data) {
+  var peer = this.state
 
-  peer.feed._putBuffer(next.block, next.value, next, function (err) {
+  peer.feed._putBuffer(data.block, data.value, data, function (err) {
     if (err) return peer.destroy(err)
-
-    for (var i = 0; i < peer.feed._selection.length; i++) {
-      var s = peer.feed._selection[i]
-
-      if (peer.feed.has(s.index)) {
-        peer.feed._selection.splice(i--, 1)
-        peer.feed.get(s.index, s.cb)
-      }
-    }
-
-    peer.responses.shift()
-    if (peer.responses.length) write(peer)
+    drain(peer, data.block)
   })
 }
 
-function onrequest (data) {
-  // TODO: if "too many" requests are pending - ignore or error
-  var peer = this.state
+function drain (peer, block) {
+  for (var i = 0; i < peer.feed._selection.length; i++) {
+    var s = peer.feed._selection[i]
+    if (s.index !== block) continue
 
-  peer.remoteRequests.push(data)
-  if (peer.remoteRequests.length === 1) read(peer)
-}
-
-function ondata (data) {
-  // TODO: if "too many" responses are pending - ignore or error
-  var peer = this.state
-
-  peer.responses.push(data)
-  if (peer.responses.length === 1) write(peer)
+    peer.feed._selection.splice(i--, 1)
+    peer.feed.get(s.index, s.cb)
+  }
 }
 
 function expand (buf, length) {
