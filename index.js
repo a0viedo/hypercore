@@ -250,10 +250,10 @@ Feed.prototype._readyAndProof = function (index, opts, cb) {
 
 Feed.prototype.put = function (index, data, proof, cb) {
   if (!this.opened) return this._readyAndPut(index, data, proof, cb)
-  this._putBuffer(index, this._codec.encode(data), proof, cb)
+  this._putBuffer(index, this._codec.encode(data), proof, null, cb)
 }
 
-Feed.prototype._putBuffer = function (index, data, proof, cb) {
+Feed.prototype._putBuffer = function (index, data, proof, from, cb) {
   var self = this
   var trusted = -1
   var missing = []
@@ -302,7 +302,7 @@ Feed.prototype._putBuffer = function (index, data, proof, cb) {
     if (err) return cb(err)
     var writes = self._verify(index, data, proof, missingNodes, trustedNode)
     if (!writes) return cb(new Error('Could not verify data'))
-    self._commit(index, data, writes, cb)
+    self._commit(index, data, writes, from, cb)
   }
 }
 
@@ -314,7 +314,7 @@ Feed.prototype._readyAndPut = function (index, data, proof, cb) {
   })
 }
 
-Feed.prototype._commit = function (index, data, nodes, cb) {
+Feed.prototype._commit = function (index, data, nodes, from, cb) {
   var self = this
   var pending = nodes.length + 1
   var error = null
@@ -330,6 +330,8 @@ Feed.prototype._commit = function (index, data, nodes, cb) {
     for (var i = 0; i < nodes.length; i++) self.tree.set(nodes[i].index)
     self.tree.set(2 * index)
     if (self.bitfield.set(index, true)) self.emit('download', index, data)
+    if (self._peers.length) self._announce({start: index}, from)
+
     self._sync(cb)
   }
 }
@@ -399,15 +401,11 @@ Feed.prototype._verify = function (index, data, proof, missing, trusted) {
   }
 }
 
-Feed.prototype._announce = function (start) {
-  var cnt = this._peers.length
-  if (!cnt) return
-
-  var message = {
-    start: start
+Feed.prototype._announce = function (message, from) {
+  for (var i = 0; i < this._peers.length; i++) {
+    var peer = this._peers[i]
+    if (peer !== from) peer.have(message)
   }
-
-  for (var i = 0; i < cnt; i++) this._peers.have(message)
 }
 
 Feed.prototype.has = function (index) {
@@ -525,11 +523,16 @@ Feed.prototype._append = function (batch, cb) {
     if (--pending) return
     if (error) return cb(error)
 
+    var start = self.blocks
+
     self.bytes += offset // TODO: set after _sync (have a ._bytes prop)
     for (var i = 0; i < batch.length; i++) {
       self.bitfield.set(self.blocks, true)
       self.tree.set(2 * self.blocks++) // TODO: also set after _sync (have a ._blocks prop)
     }
+
+    var message = self.blocks - start > 1 ? {start: start, end: self.blocks} : {start: start}
+    if (self._peers.length) self._announce(message)
 
     self._sync(cb)
   }

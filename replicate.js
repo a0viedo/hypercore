@@ -1,7 +1,7 @@
 var bitfield = require('sparse-bitfield')
 var protocol = require('hypercore-protocol')
 var set = require('unordered-set')
-var unordered = require('unordered-array-remove')
+var remove = require('unordered-array-remove')
 var rle = require('bitfield-rle')
 
 module.exports = replicate
@@ -21,6 +21,7 @@ function replicate (feed, stream) {
   feed.ready(function (err) {
     if (stream.destroyed) return
     if (err) return stream.destroy(err)
+    if (!feed.key) return stream.destroy(new Error('Finalize static feed before replicating'))
 
     set.add(feed._peers, peer)
     peer.channel = stream.open(feed.key)
@@ -84,13 +85,22 @@ Peer.prototype.destroy = function (err) {
 
 function onhave (message) {
   var peer = this.state
-  var pageSize = peer.remoteBitfield.pageSize
-  var bitfield = rle.decode(message.bitfield)
 
-  for (var i = 0; i < bitfield.length; i += pageSize) {
-    var page = bitfield.slice(i, i + pageSize)
-    if (page.length < pageSize) page = expand(page, pageSize)
-    peer.remoteBitfield.setBuffer(i, page)
+  if (message.bitfield) { // TODO: support .start
+    var pageSize = peer.remoteBitfield.pageSize
+    var bitfield = rle.decode(message.bitfield)
+
+    for (var i = 0; i < bitfield.length; i += pageSize) {
+      var page = bitfield.slice(i, i + pageSize)
+      if (page.length < pageSize) page = expand(page, pageSize)
+      peer.remoteBitfield.setBuffer(i, page)
+    }
+  } else {
+    var start = message.start
+    var end = message.end || start + 1
+    while (start < end) {
+      peer.remoteBitfield.set(start++, true)
+    }
   }
 
   peer.update()
@@ -108,13 +118,15 @@ function onrequest (data) {
     peer.feed._storage.getData(data.block, function (err, buffer) {
       if (err) return peer.destroy(err)
 
-      peer.feed.emit('upload', data.block, buffer, proof)
+      peer.remoteBitfield.set(data.block, true)
       peer.channel.data({
         block: data.block,
         value: buffer,
         nodes: proof.nodes,
         signature: proof.signature
       })
+
+      peer.feed.emit('upload', data.block, buffer, proof)
     })
   })
 }
@@ -122,7 +134,7 @@ function onrequest (data) {
 function ondata (data) {
   var peer = this.state
 
-  peer.feed._putBuffer(data.block, data.value, data, function (err) {
+  peer.feed._putBuffer(data.block, data.value, data, peer, function (err) {
     if (err) return peer.destroy(err)
     drain(peer, data.block)
   })
@@ -133,7 +145,7 @@ function drain (peer, block) {
     var s = peer.feed._selection[i]
     if (s.index !== block) continue
 
-    unordered.remove(peer.feed._selection, i--)
+    remove(peer.feed._selection, i--)
 
     if (s.get) {
       peer.feed.get(s.index, s.callback)
