@@ -79,7 +79,7 @@ Peer.prototype.update = function () {
 Peer.prototype.destroy = function (err) {
   if (this.destroyed) return
   this.destroyed = true
-  set.remote(this.feed._peers, this)
+  set.remove(this.feed._peers, this)
   this.stream.destroy(err)
 }
 

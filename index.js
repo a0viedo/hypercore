@@ -188,6 +188,7 @@ Feed.prototype.download = function (index, cb) {
     get: false,
     callback: cb
   })
+  this._updatePeers()
 }
 
 Feed.prototype.undownload = function (index, cb) {
@@ -418,7 +419,7 @@ Feed.prototype.get = function (index, cb) {
   if (!this.has(index)) {
     if (this.writable) return cb(new Error('Block not written'))
     this._selection.push({index: index, get: true, callback: cb})
-    for (var i = 0; i < this._peers.length; i++) this._peers[i].update()
+    this._updatePeers()
     return
   }
 
@@ -432,6 +433,10 @@ Feed.prototype._readyAndGet = function (index, cb) {
     if (err) return cb(err)
     self.get(index, cb)
   })
+}
+
+Feed.prototype._updatePeers = function () {
+  for (var i = 0; i < this._peers.length; i++) this._peers[i].update()
 }
 
 Feed.prototype._wrapCodec = function (cb) {

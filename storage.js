@@ -45,6 +45,7 @@ Storage.prototype.dataOffset = function (index, cachedNodes, cb) {
   var offset = 0
   var pending = roots.length
   var error = null
+  var blk = 2 * index
 
   if (!pending) this.getNode(2 * index, onlast)
 
@@ -65,7 +66,10 @@ Storage.prototype.dataOffset = function (index, cachedNodes, cb) {
     if (--pending) return
 
     if (error) return cb(error)
-    self.getNode(2 * index, onlast)
+
+    var last = findNode(cachedNodes, blk)
+    if (last) onlast(null, last)
+    else self.getNode(blk, onlast)
   }
 }
 
